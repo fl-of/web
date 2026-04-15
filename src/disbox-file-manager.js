@@ -1,9 +1,11 @@
 /*global chrome*/
 import { sha256 } from 'js-sha256';
 
+import pako from "pako";
+
 const SERVER_URL = 'https://disbox-server.fly.dev';
 export const FILE_DELIMITER = '/';
-const FILE_CHUNK_SIZE = 25 * 1024 * 1023 // Almost 25MB
+const FILE_CHUNK_SIZE = 9 * 1024 * 1024 // Almost 8MB
 
 async function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -148,25 +150,59 @@ class DiscordFileStorage {
         return attachmentUrls;
     }
 
-    async upload(sourceFile, namePrefix, onProgress = null) {
-        const messageIds = [];
-        let uploadedBytes = 0;
-        let index = 0;
-        if (onProgress) {
-            onProgress(0, sourceFile.size);
-        }
-        for await (const chunk of readFile(sourceFile, FILE_CHUNK_SIZE)) {
-            const result = await this.webhookClient.sendAttachment(`${namePrefix}_${index}`, new Blob([chunk]));
-            messageIds.push(result.id);
-            uploadedBytes += chunk.byteLength;
-            index++;
+async upload(sourceFile, namePrefix, onProgress = null) {
+    const messageIds = [];
+    let uploadedBytes = 0;
+    let index = 0;
+
+    const concurrency = 4;
+
+    if (onProgress) onProgress(0, sourceFile.size);
+
+    // 1. Lire fichier en chunks (sans compression)
+    const chunks = [];
+
+    for await (const chunk of readFile(sourceFile, FILE_CHUNK_SIZE)) {
+        chunks.push({
+            data: chunk,
+            size: chunk.byteLength,
+            index: index++
+        });
+    }
+
+    // 2. Upload parallèle stable
+    let pointer = 0;
+
+    const workers = Array(concurrency).fill(null).map(async () => {
+        while (true) {
+            const i = pointer++;
+            if (i >= chunks.length) break;
+
+            const item = chunks[i];
+
+            const result = await this.webhookClient.sendAttachment(
+                `${namePrefix}_${item.index}`,
+                new Blob([item.data])
+            );
+
+            messageIds[item.index] = result.id;
+
+            uploadedBytes += item.size;
+
             if (onProgress) {
                 onProgress(uploadedBytes, sourceFile.size);
             }
         }
-        return messageIds;
+    });
+
+    await Promise.all(workers);
+
+    if (onProgress) {
+        onProgress(sourceFile.size, sourceFile.size);
     }
 
+    return messageIds;
+}
 
     async download(messageIds, writeStream, onProgress = null, fileSize=-1) {
         const attachmentUrls = await this.getAttachmentUrls(messageIds);
@@ -425,22 +461,53 @@ class DisboxFileManager {
         return file;
     }
 
-    async downloadFile(path, writeStream, onProgress) {
-        const file = this.getFile(path);
-        if (!file) {
-            throw new Error(`File not found: ${path}`);
-        }
-        if (file.type === 'directory') {
-            throw new Error(`Cannot download content from directory: ${path}`);
-        }
-
-        const contentReferences = JSON.parse(file.content);
-        await this.discordFileStorage.download(contentReferences, writeStream, onProgress, file.size);
-
-        if (onProgress) { // Reconsider this
-            onProgress(1, 1);
-        }
+async downloadFile(path, writeStream, onProgress) {
+    const file = this.getFile(path);
+    if (!file) {
+        throw new Error(`File not found: ${path}`);
     }
+    if (file.type === 'directory') {
+        throw new Error(`Cannot download content from directory: ${path}`);
+    }
+
+    const contentReferences = JSON.parse(file.content);
+
+    // 1. récupérer blobs Discord
+    const attachmentUrls = await this.discordFileStorage.getAttachmentUrls(contentReferences);
+    const blobs = [];
+
+    let downloaded = 0;
+
+    for (let url of attachmentUrls) {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        blobs.push(blob);
+
+        downloaded += blob.size;
+        if (onProgress) onProgress(downloaded, file.size);
+    }
+
+    // 2. merger tout en Uint8Array
+    const buffers = await Promise.all(blobs.map(b => b.arrayBuffer()));
+
+    let totalLength = buffers.reduce((sum, b) => sum + b.byteLength, 0);
+    let merged = new Uint8Array(totalLength);
+
+    let offset = 0;
+    for (let buf of buffers) {
+        merged.set(new Uint8Array(buf), offset);
+        offset += buf.byteLength;
+    }
+
+    // 3. DECOMPRESSION (IMPORTANT)
+    const decompressed = pako.inflate(merged);
+
+    // 4. écrire fichier final
+    await writeStream.write(new Blob([decompressed]));
+    await writeStream.close();
+
+    if (onProgress) onProgress(1, 1);
+}
 
     async getAttachmentUrls(path) {
         const file = this.getFile(path);

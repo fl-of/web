@@ -9,7 +9,29 @@ import { MdLockOutline, MdMoneyOff, MdOutlineSpeed } from 'react-icons/md';
 import { useNavigate } from 'react-router-dom';
 import NavigationBar from './NavigationBar';
 
-
+function ProgressBar({ value }) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        background: "#2f3136",
+        borderRadius: 8,
+        padding: 4,
+        marginTop: 10
+      }}
+    >
+      <div
+        style={{
+          width: `${value}%`,
+          height: 10,
+          background: "#4ade80",
+          borderRadius: 6,
+          transition: "width 0.2s ease"
+        }}
+      />
+    </div>
+  );
+}
 
 function isMobile() {
   let check = false;
@@ -20,11 +42,84 @@ function isMobile() {
 
 function Home() {
   const [showMobileDialog, setShowMobileDialog] = useState(isMobile());
-  const navigate = useNavigate();
+  const [isDragging, setIsDragging] = useState(false);
+  const handleDrop = async (e) => {
+  e.preventDefault();
+  setIsDragging(false);
 
+  const file = e.dataTransfer.files?.[0];
+  if (!file) return;
+
+  const fileManager = window.fileManager;
+  if (!fileManager) return;
+
+  await fileManager.uploadFile(
+    "/dragdrop/" + file.name,
+    file,
+    (uploaded, total) => {
+      setProgress(Math.round((uploaded / total) * 100));
+    }
+  );
+
+  setProgress(100);
+};
+
+const handleDragOver = (e) => {
+  e.preventDefault();
+  setIsDragging(true);
+};
+
+const handleDragLeave = () => {
+  setIsDragging(false);
+};
+  const [progress, setProgress] = useState(0);
+  const navigate = useNavigate();
+  const handleUpload = async () => {
+  setProgress(0);
+
+  // TODO: remplace ça par ton vrai file picker
+  const file = await window.showOpenFilePicker?.();
+
+  if (!file) return;
+
+  const fileBlob = await file[0].getFile();
+
+  const fileManager = window.fileManager; // supposé déjà créé ailleurs
+
+  await fileManager.uploadFile(
+    "/test/" + fileBlob.name,
+    fileBlob,
+    (uploaded, total) => {
+      setProgress(Math.round((uploaded / total) * 100));
+    }
+  );
+
+  setProgress(100);
+};
   return (
     <div style={{ height: "100%" }}>
       <NavigationBar />
+      {isDragging && (
+  <div
+    style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      background: "rgba(0,0,0,0.4)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: "2rem",
+      color: "white",
+      zIndex: 9999,
+      pointerEvents: "none"
+    }}
+  >
+    Drop your file to upload 🚀
+  </div>
+)}
       <Dialog open={showMobileDialog}>
         <DialogTitle>Warning</DialogTitle>
         <DialogContent>
@@ -34,7 +129,16 @@ function Home() {
           <MuiButton onClick={() => { setShowMobileDialog(false) }}>Continue anyway</MuiButton>
         </DialogActions>
       </Dialog>
-      <div className="App App-header">
+      <div
+         className="App App-header"
+          onDrop={handleDrop}
+           onDragOver={handleDragOver}
+             onDragLeave={handleDragLeave}
+              style={{
+                 border: isDragging ? "3px dashed #4ade80" : "none",
+                   transition: "0.2s ease"
+                       }}
+>
         <div style={{ width: "100%", backgroundColor: "#2F3136" }}>
           <h1 style={{ fontSize: "6rem" }} className="mt-3">
             <b>Disbox</b>
@@ -45,9 +149,17 @@ function Home() {
           <div className='m-5'>
             <Button style={{ fontSize: "2.5rem" }} variant="primary" onClick={() => { navigate("/setup") }}><b>Start using</b></Button>
             <Button className="m-2" style={{ fontSize: "2.5rem" }} variant="secondary" onClick={() => { window.open("https://github.com/DisboxApp/web") }}><b>Find out more</b></Button>
+            <Button
+             className="m-2"
+             style={{ fontSize: "2.5rem", marginTop: "15px" }}
+             variant="success"
+             onClick={handleUpload}
+            >
+  Upload file
+</Button>
           </div>
         </div>
-
+        <ProgressBar value={progress} />
         <div style={{ textAlign: "left", backgroundColor: "#FFFFFF", width: "100%", display: "flex", justifyContent: "center" }}>
           <Card bg="dark" style={{ width: '18rem', height: '24rem' }} className="m-2 mt-5">
             <Card.Header><MdMoneyOff /> Free</Card.Header>
