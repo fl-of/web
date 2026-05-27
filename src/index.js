@@ -11,6 +11,8 @@ import './index.css';
 import reportWebVitals from './reportWebVitals';
 import Setup from './Setup';
 
+const basename = process.env.PUBLIC_URL || '/';
+
 function HomeOrApp() {
   if (localStorage.getItem("webhookUrl") === null) {
     return <Home />
@@ -21,7 +23,7 @@ function HomeOrApp() {
 
 ReactDOM.render(
   <React.StrictMode>
-    <BrowserRouter basename={'/web'}>
+    <BrowserRouter basename={basename}>
       <Routes>
         {/* <Route path="/" element={<App />} /> */}
         <Route path="" element={<HomeOrApp />}/>
